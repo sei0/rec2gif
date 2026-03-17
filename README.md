@@ -14,6 +14,14 @@ Requires [ffmpeg](https://ffmpeg.org/) and [gifsicle](https://www.lcdf.org/gifsi
 brew install ffmpeg gifsicle
 ```
 
+### Agent Skill
+
+Install as an [agent skill](https://skills.sh) so your AI coding agent knows how to use rec2gif:
+
+```bash
+npx skills add sei0/rec2gif
+```
+
 ## Usage
 
 ```bash
