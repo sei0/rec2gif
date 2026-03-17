@@ -2,6 +2,22 @@
 
 Convert macOS screen recordings to optimized GIFs for GitHub PRs.
 
+> **One command. 30s recording → ~3MB GIF. GitHub-ready.**
+
+```
+$ rec2gif
+Found: ~/Downloads/Screen Recording 2026-03-17.mov (12.4MB)
+Converting...
+  → Generating palette...
+  → Creating GIF...
+  → Optimizing...
+
+Done! Screen Recording 2026-03-17.gif (2.8MB)
+✓ GitHub ready (under 10MB)
+
+![demo](Screen Recording 2026-03-17.gif)
+```
+
 ## Install
 
 ```bash
@@ -52,7 +68,7 @@ Select [1]:
 | `-o, --output` | auto | Output file path |
 | `-d, --max-duration` | 60 | Max video duration in seconds (hard cap: 120) |
 | `--no-optimize` | | Skip gifsicle optimization |
-| `--copy` | | Copy output file path to clipboard |
+| `--copy` | | Copy Markdown snippet to clipboard |
 
 ## How it works
 

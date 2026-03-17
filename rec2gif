@@ -45,7 +45,7 @@ Options:
   -o, --output PATH      Output file path (default: input_name.gif)
   -d, --max-duration NUM Max duration in seconds (default: 60, max: 120)
       --no-optimize      Skip gifsicle optimization
-      --copy             Copy output path to clipboard
+      --copy             Copy Markdown snippet to clipboard
   -h, --help             Show this help
 
 Examples:
@@ -247,7 +247,13 @@ else
     echo "  Try: rec2gif --width 480 --fps 10"
 fi
 
+# --- Markdown snippet ---
+output_basename="${output:t}"
+echo ""
+echo "![demo]($output_basename)"
+
 if [[ "$copy_path" == true ]]; then
-    printf '%s' "$output" | pbcopy
-    echo "📋 Path copied to clipboard"
+    printf '%s' "![demo]($output_basename)" | pbcopy
+    echo ""
+    echo "📋 Markdown copied to clipboard"
 fi
