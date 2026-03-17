@@ -1,0 +1,253 @@
+#!/bin/zsh
+set -euo pipefail
+setopt NULL_GLOB
+
+# rec2gif — Convert screen recordings to optimized GIFs for GitHub PRs
+
+# --- Constants ---
+DEFAULT_WIDTH=960
+DEFAULT_FPS=15
+DEFAULT_LOSSY=30
+DEFAULT_MAX_DURATION=60
+HARD_MAX_DURATION=120
+SEARCH_DIR="$HOME/Downloads"
+GITHUB_MAX_SIZE=$((10 * 1024 * 1024))
+
+# --- Globals ---
+width=$DEFAULT_WIDTH
+fps=$DEFAULT_FPS
+lossy=$DEFAULT_LOSSY
+max_duration=$DEFAULT_MAX_DURATION
+optimize=true
+copy_path=false
+output=""
+input=""
+palette=""
+temp_gif=""
+
+cleanup() {
+    [[ -f "$palette" ]] && rm -f "$palette"
+    [[ -f "$temp_gif" ]] && rm -f "$temp_gif"
+}
+trap cleanup EXIT
+
+# --- Helpers ---
+usage() {
+    cat <<'EOF'
+Usage: rec2gif [options] [input_file]
+
+Convert screen recordings to optimized GIFs for GitHub PRs.
+
+Options:
+  -w, --width NUM        Output width in pixels (default: 960)
+  -f, --fps NUM          Frames per second (default: 15)
+  -l, --lossy NUM        Lossy compression 0-200 (default: 30)
+  -o, --output PATH      Output file path (default: input_name.gif)
+  -d, --max-duration NUM Max duration in seconds (default: 60, max: 120)
+      --no-optimize      Skip gifsicle optimization
+      --copy             Copy output path to clipboard
+  -h, --help             Show this help
+
+Examples:
+  rec2gif                          Convert latest screen recording
+  rec2gif recording.mov            Convert specific file
+  rec2gif -w 480 -f 10 --copy      Convert with custom settings
+EOF
+}
+
+format_size() {
+    local bytes=$1
+    if (( bytes >= 1048576 )); then
+        awk "BEGIN { printf \"%.1fMB\", $bytes / 1048576 }"
+    else
+        awk "BEGIN { printf \"%.0fKB\", $bytes / 1024 }"
+    fi
+}
+
+check_deps() {
+    local missing=""
+    command -v ffmpeg  >/dev/null 2>&1 || missing+="ffmpeg "
+    command -v ffprobe >/dev/null 2>&1 || missing+="ffprobe "
+    [[ "$optimize" == true ]] && ! command -v gifsicle >/dev/null 2>&1 && missing+="gifsicle "
+    if [[ -n "$missing" ]]; then
+        echo "Error: Missing dependencies: $missing"
+        echo "Install with: brew install ffmpeg gifsicle"
+        exit 1
+    fi
+}
+
+select_recording() {
+    local known_prefixes=(
+        "Screen Recording"
+        "화면 기록"
+        "画面収録"
+        "录屏"
+        "螢幕錄製"
+        "螢幕錄影"
+        "ScreenRecording_"
+    )
+
+    # Collect files matching known screen recording patterns
+    local matches=()
+    local prefix ext
+    for prefix in "${known_prefixes[@]}"; do
+        for ext in mov mp4; do
+            for file in "$SEARCH_DIR/${prefix}"*."${ext}"; do
+                [[ -f "$file" ]] && matches+=("$file")
+            done
+        done
+    done
+
+    # Fallback: no known patterns → show recent videos
+    if (( ${#matches[@]} == 0 )); then
+        echo "No screen recordings found. Showing recent videos in $SEARCH_DIR:" >&2
+        local fallback=("${(@f)$(ls -t "$SEARCH_DIR"/*.mov "$SEARCH_DIR"/*.mp4 2>/dev/null | head -10)}")
+        if (( ${#fallback[@]} == 0 )); then
+            echo "Error: No .mov/.mp4 files found in $SEARCH_DIR" >&2
+            exit 1
+        fi
+        show_selection "${fallback[@]}"
+        return
+    fi
+
+    # Sort by mtime (newest first)
+    local sorted=("${(@f)$(ls -t "${matches[@]}" 2>/dev/null)}")
+
+    if (( ${#sorted[@]} == 1 )); then
+        echo "${sorted[1]}"
+        return
+    fi
+
+    show_selection "${sorted[@]}"
+}
+
+show_selection() {
+    local files=("$@")
+    local max=10
+    local display_count=$(( ${#files[@]} < max ? ${#files[@]} : max ))
+
+    echo "Found ${#files[@]} recordings:" >&2
+    echo "" >&2
+
+    local i file
+    for (( i = 1; i <= display_count; i++ )); do
+        file="${files[$i]}"
+        echo "  $i) ${file:t} ($(format_size $(stat -f%z "$file")), $(stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$file"))" >&2
+    done
+
+    (( ${#files[@]} > max )) && echo "  ... and $(( ${#files[@]} - max )) more" >&2
+
+    echo "" >&2
+    printf "Select [1]: " >&2
+    local choice
+    read -r choice || choice=""
+    choice=${choice:-1}
+
+    case "$choice" in
+        *[!0-9]*) echo "Error: Invalid selection" >&2; exit 1 ;;
+    esac
+    if (( choice < 1 || choice > display_count )); then
+        echo "Error: Selection out of range (1-$display_count)" >&2
+        exit 1
+    fi
+
+    echo "${files[$choice]}"
+}
+
+check_duration() {
+    local file=$1 limit=$2
+    local duration
+    duration=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$file" 2>/dev/null) || {
+        echo "Error: Cannot read duration from '$file'"
+        exit 1
+    }
+    duration=${duration//[[:space:]]/}
+
+    if (( $(awk "BEGIN { print ($duration > $limit) }") )); then
+        echo "Error: Video is ${duration%.*}s, exceeds limit of ${limit}s"
+        echo "Use --max-duration to increase (hard cap: ${HARD_MAX_DURATION}s)"
+        exit 1
+    fi
+}
+
+# --- Argument Parsing ---
+while (( $# > 0 )); do
+    case "$1" in
+        -w|--width)        width=$2;        shift 2 ;;
+        -f|--fps)          fps=$2;          shift 2 ;;
+        -l|--lossy)        lossy=$2;        shift 2 ;;
+        -o|--output)       output=$2;       shift 2 ;;
+        -d|--max-duration)
+            max_duration=$2
+            if (( max_duration > HARD_MAX_DURATION )); then
+                echo "Error: --max-duration cannot exceed ${HARD_MAX_DURATION}s"
+                exit 1
+            fi
+            shift 2 ;;
+        --no-optimize)     optimize=false;  shift ;;
+        --copy)            copy_path=true;  shift ;;
+        -h|--help)         usage; exit 0 ;;
+        -*)
+            echo "Error: Unknown option '$1'"
+            echo "Run 'rec2gif --help' for usage"
+            exit 1 ;;
+        *)                 input=$1;        shift ;;
+    esac
+done
+
+# --- Main ---
+check_deps
+
+if [[ -z "$input" ]]; then
+    input=$(select_recording)
+fi
+
+if [[ ! -f "$input" ]]; then
+    echo "Error: File not found: $input"
+    exit 1
+fi
+
+[[ -z "$output" ]] && output="${input%.*}.gif"
+
+echo "Found: $input ($(format_size $(stat -f%z "$input")))"
+
+check_duration "$input" "$max_duration"
+
+palette=$(mktemp "${TMPDIR:-/tmp}/rec2gif-palette-XXXXXX.png")
+temp_gif=$(mktemp "${TMPDIR:-/tmp}/rec2gif-temp-XXXXXX.gif")
+
+echo "Converting..."
+
+echo "  → Generating palette..."
+ffmpeg -v error -i "$input" \
+    -vf "fps=${fps},scale=${width}:-1:flags=lanczos,palettegen=stats_mode=full" \
+    -update 1 -y "$palette"
+
+echo "  → Creating GIF..."
+ffmpeg -v error -i "$input" -i "$palette" \
+    -lavfi "fps=${fps},scale=${width}:-1:flags=lanczos [x]; [x][1:v] paletteuse=dither=none" \
+    -y "$temp_gif"
+
+if [[ "$optimize" == true ]]; then
+    echo "  → Optimizing..."
+    gifsicle -O3 --lossy="$lossy" -i "$temp_gif" -o "$output"
+else
+    mv "$temp_gif" "$output"
+fi
+
+# --- Summary ---
+output_size=$(stat -f%z "$output")
+echo ""
+echo "Done! $output ($(format_size $output_size))"
+
+if (( output_size <= GITHUB_MAX_SIZE )); then
+    echo "✓ GitHub ready (under 10MB)"
+else
+    echo "⚠ Warning: $(awk "BEGIN { printf \"%.1f\", $output_size / 1048576 }")MB exceeds GitHub's 10MB limit"
+    echo "  Try: rec2gif --width 480 --fps 10"
+fi
+
+if [[ "$copy_path" == true ]]; then
+    printf '%s' "$output" | pbcopy
+    echo "📋 Path copied to clipboard"
+fi

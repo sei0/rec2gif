@@ -1,0 +1,31 @@
+{
+  "name": "rec2gif",
+  "version": "0.1.0",
+  "description": "Convert macOS screen recordings to optimized GIFs for GitHub PRs",
+  "bin": {
+    "rec2gif": "./rec2gif"
+  },
+  "scripts": {
+    "postinstall": "echo '⚠ rec2gif requires ffmpeg and gifsicle: brew install ffmpeg gifsicle'"
+  },
+  "keywords": [
+    "gif",
+    "screen-recording",
+    "macos",
+    "ffmpeg",
+    "github",
+    "cli"
+  ],
+  "author": "sei0",
+  "license": "MIT",
+  "os": [
+    "darwin"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sei0/rec2gif"
+  }
+}
